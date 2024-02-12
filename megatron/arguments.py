@@ -17,7 +17,7 @@ from megatron.core.models.retro import RetroConfig
 from megatron.core.transformer import TransformerConfig
 
 
-def parse_args(extra_args_provider=None, ignore_unknown_args=False):
+def parse_args(extra_args_provider=None, ignore_unknown_args=False) -> argparse.Namespace:
     """Parse all arguments."""
     parser = argparse.ArgumentParser(description='Megatron-LM Arguments',
                                      allow_abbrev=False)
@@ -68,6 +68,7 @@ def parse_args(extra_args_provider=None, ignore_unknown_args=False):
 
     return args
 
+
 def validate_args(args, defaults={}):
     # Tensor model parallel size.
     args.tensor_model_parallel_size = min(
@@ -85,8 +86,7 @@ def validate_args(args, defaults={}):
         args.pipeline_model_parallel_size
     )
     # Checks.
-    model_parallel_size = args.pipeline_model_parallel_size * \
-                          args.tensor_model_parallel_size
+    model_parallel_size = args.pipeline_model_parallel_size * args.tensor_model_parallel_size
     assert args.world_size % (model_parallel_size * args.context_parallel_size) == 0, \
         'world size ({}) is not divisible by tensor parallel size ({}) times ' \
         'pipeline parallel size ({}) times context parallel size ({})'.format(
@@ -104,14 +104,10 @@ def validate_args(args, defaults={}):
                   args.pipeline_model_parallel_size), flush=True)
     if args.pipeline_model_parallel_size > 1:
         if args.pipeline_model_parallel_split_rank is not None:
-            assert args.pipeline_model_parallel_split_rank < \
-                    args.pipeline_model_parallel_size, 'split rank needs'\
-                    ' to be less than pipeline model parallel size ({})'.format(
-                            args.pipeline_model_parallel_size)
+            assert args.pipeline_model_parallel_split_rank < args.pipeline_model_parallel_size, 'split rank needs to be less than pipeline model parallel size ({})'.format(args.pipeline_model_parallel_size)
 
     if args.tp_comm_overlap:
-        assert args.sequence_parallel == True, 'Tensor parallel communication/GEMM overlap can happen only when sequence parallelism is enabled'
-
+        assert args.sequence_parallel is True, 'Tensor parallel communication/GEMM overlap can happen only when sequence parallelism is enabled'
 
     # Deprecated arguments
     assert args.batch_size is None, '--batch-size argument is no longer ' \
@@ -464,7 +460,7 @@ def validate_args(args, defaults={}):
         assert args.spec is None, "Model Spec must be None when using MoEs"
 
     # Expert parallelism check
-    if args.expert_model_parallel_size  > 1:
+    if args.expert_model_parallel_size > 1:
         assert args.num_experts is not None, "num_experts must be non None to use expert model parallelism"
         assert args.num_experts % args.expert_model_parallel_size == 0, \
             "Number of experts should be a multiple of expert model parallel_size."
@@ -480,7 +476,7 @@ def validate_args(args, defaults={}):
     _print_args("arguments", args)
     retro_args = get_retro_args()
     if retro_args and args != retro_args:
-        _print_args("retro arguments", types.SimpleNamespace(**{k:v for k,v in vars(retro_args).items() if k.startswith("retro")}, rank=args.rank))
+        _print_args("retro arguments", types.SimpleNamespace(**{k: v for k, v in vars(retro_args).items() if k.startswith("retro")}, rank=args.rank))
 
     return args
 
@@ -572,6 +568,7 @@ def _add_transformer_engine_args(parser):
                        help='Which Transformer implementation to use.')
 
     return parser
+
 
 def _add_inference_args(parser):
     group = parser.add_argument_group(title='inference')
@@ -1495,6 +1492,7 @@ def _add_vision_args(parser):
                        help='warmup teacher temperaure epochs')
 
     return parser
+
 
 def _add_experimental_args(parser):
     group = parser.add_argument_group(title='experimental')
