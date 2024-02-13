@@ -647,6 +647,7 @@ class ZeroBubbleVPipeScheduler:
             )
 
         rank = parallel_state.get_pipeline_model_parallel_rank()
+
         assert get_tensor_shapes(
             rank=rank - 1,
             model_type=model_type,
@@ -654,7 +655,7 @@ class ZeroBubbleVPipeScheduler:
             micro_batch_size=micro_batch_size,
             decoder_seq_length=decoder_seq_length,
             config=config,
-        )[0] == tensor_shape
+        )[0] == tensor_shape, f"rank {rank - 1} shape {get_tensor_shapes(rank=rank - 1, model_type=model_type, seq_length=seq_length, micro_batch_size=micro_batch_size, decoder_seq_length=decoder_seq_length, config=config)[0]} != {tensor_shape}"
         assert get_tensor_shapes(
             rank=rank,
             model_type=model_type,
