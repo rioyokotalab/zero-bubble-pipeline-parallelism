@@ -12,6 +12,8 @@ from .log_handler import CustomHandler
 # Make default logging level INFO, but filter out all log messages not from MCore.
 logging.basicConfig(handlers=[CustomHandler()], level=logging.INFO)
 import time
+import wandb
+import typing
 # The earliest we can measure the start time.
 _TRAIN_START_TIME = time.time()
 import torch
@@ -509,7 +511,7 @@ def train_step(forward_step_func, data_iterator,
 
 def training_log(loss_dict, total_loss_dict, learning_rate, iteration,
                  loss_scale, report_memory_flag, skipped_iter,
-                 grad_norm, params_norm, num_zeros_in_grad):
+                 grad_norm, params_norm, num_zeros_in_grad, optimizer=None, skipped_iteration=0):
     """Log training information such as losses, timing, ...."""
     args = get_args()
     timers = get_timers()
@@ -662,11 +664,93 @@ def training_log(loss_dict, total_loss_dict, learning_rate, iteration,
                 iteration,
             )
 
+    wandb_stats: dict[str, typing.Any] = {}
+
+    opt_stats = [0.0] * 8
+    opt_stats_2 = [0.0] * 4
+    if optimizer is not None:
+        """logging optimizer states"""
+        for _, param_group in enumerate(optimizer.param_groups):
+            for _, param in enumerate(param_group["params"]):
+                opt_stats[0] += (torch.norm(optimizer.state[param]['exp_avg_sq']).item())**2
+                opt_stats[1] += (torch.norm(optimizer.state[param]['exp_avg_sq'].sqrt()).item())**2
+                opt_stats[2] += (torch.norm(optimizer.state[param]['exp_avg']).item())**2
+                opt_stats[3] += (torch.norm(param).item())**2
+                opt_stats[4] += torch.norm(optimizer.state[param]['exp_avg_sq'], p=1).item()
+                opt_stats[5] += torch.norm(optimizer.state[param]['exp_avg_sq'].sqrt(), p=1).item()
+                opt_stats[6] += torch.norm(optimizer.state[param]['exp_avg'], p=1).item()
+                opt_stats[7] += torch.norm(param, p=1).item()
+                opt_stats_2[0] = max(opt_stats_2[0], abs(optimizer.state[param]['exp_avg_sq'].max().item()), abs(optimizer.state[param]['exp_avg_sq'].min().item()))
+                opt_stats_2[1] = max(opt_stats_2[1], optimizer.state[param]['exp_avg_sq'].sqrt().abs_().max().item())
+                opt_stats_2[2] = max(opt_stats_2[2], abs(optimizer.state[param]['exp_avg'].max().item()), abs(optimizer.state[param]['exp_avg'].min().item()))
+                opt_stats_2[3] = max(opt_stats_2[3], abs(param.max().item()), abs(param.min().item()))
+
+    if wandb_writer and (iteration % args.tensorboard_log_interval == 0) and is_last_rank():
+        wandb_stats["utils/steps-vs-samples"] = args.consumed_train_samples
+        # wandb_stats["utils/steps-vs-tokens"] = args.consumed_train_tokens
+
+        if args.log_learning_rate_to_tensorboard:
+            wandb_stats["utils/learning-rate"] = learning_rate
+
+        if args.log_batch_size_to_tensorboard:
+            wandb_stats["utils/batch-size"] = batch_size
+
+        for key in loss_dict:
+            wandb_stats[f"lm-loss-training/{key}"] = loss_dict[key]
+            wandb_stats[f"lm-loss-training/{key}_ppl"] = math.exp(total_loss_dict[key].item())
+        if args.log_loss_scale_to_tensorboard:
+            wandb_stats["others/loss-scale"] = loss_scale
+        if grad_norm is not None:
+            wandb_stats["others/grad-norm"] = grad_norm
+        if num_zeros_in_grad is not None:
+            wandb_stats["others/num-zeros"] = num_zeros_in_grad
+        if params_norm is not None:
+            wandb_stats["others/params-norm"] = params_norm
+        if hasattr(args, 'actual_seq_length'):
+            wandb_stats["others/actual_seq_length"] = args.actual_seq_length
+
+        if optimizer is not None:
+            wandb_stats['optimizer/variance_l2'] = opt_stats[0]**0.5
+            wandb_stats['optimizer/variance_sqrt_l2'] = opt_stats[1]**0.5
+            wandb_stats['optimizer/momentum_l2'] = opt_stats[2]**0.5
+            wandb_stats['optimizer/weight_l2'] = opt_stats[3]**0.5
+            wandb_stats['optimizer/variance_l1'] = opt_stats[4]
+            wandb_stats['optimizer/variance_sqrt_l1'] = opt_stats[5]
+            wandb_stats['optimizer/momentum_l1'] = opt_stats[6]
+            wandb_stats['optimizer/weight_l1'] = opt_stats[7]
+            wandb_stats['optimizer/variance_abs_max'] = opt_stats_2[0]
+            wandb_stats['optimizer/variance_sqrt_abs_max'] = opt_stats_2[1]
+            wandb_stats['optimizer/momentum_abs_max'] = opt_stats_2[2]
+            wandb_stats['optimizer/weight_abs_max'] = opt_stats_2[3]
+
     if iteration % args.log_interval == 0:
         # timers._log_option = 'all'
         # timers.log(timers_to_log, normalizer=total_iterations)
         elapsed_time = timers('interval-time').elapsed(barrier=False)
         elapsed_time_per_iteration = elapsed_time / total_iterations
+
+        from megatron.utils import throughput_calculator
+
+        samples_per_sec, tflops, samples_per_model, model_replica_count = throughput_calculator(
+            args=args, iteration_time=elapsed_time, total_iterations=total_iterations
+        )
+        # Compute throughput.
+        samples_per_sec_per_replica = samples_per_sec / args.data_parallel_size
+        tokens_per_sec = samples_per_sec * args.seq_length
+        tokens_per_sec_per_replica = tokens_per_sec / args.data_parallel_size
+
+        wandb_stats["stats/tflops"] = tflops
+        wandb_stats["stats/samples_per_sec"] = samples_per_sec
+        wandb_stats["stats/samples_per_sec_per_replica"] = samples_per_sec_per_replica
+        wandb_stats["stats/tokens_per_sec"] = tokens_per_sec
+        wandb_stats["stats/tokens_per_sec_per_replica"] = tokens_per_sec_per_replica
+
+        # log skip batch
+        wandb_stats["others/skipped_iterations"] = skipped_iteration
+
+        if wandb_writer and is_last_rank():
+            wandb.log(wandb_stats, step=iteration)
+
         if writer:
             if args.log_timers_to_tensorboard:
                 writer.add_scalar('iteration-time',
@@ -705,6 +789,9 @@ def training_log(loss_dict, total_loss_dict, learning_rate, iteration,
             total_loss_dict[skipped_iters_key])
         log_string += ' number of nan iterations: {:3d} |'.format(
             total_loss_dict[nan_iters_key])
+        log_string += ' iteration time: {:.3f} s'.format(elapsed_time)
+        log_string += ' samples/sec: {:.1f} |'.format(samples_per_sec)
+        log_string += ' TFLOPS: {:.1f} |'.format(tflops)
         total_loss_dict[advanced_iters_key] = 0
         total_loss_dict[skipped_iters_key] = 0
         total_loss_dict[nan_iters_key] = 0
@@ -780,6 +867,17 @@ def train(forward_step_func, model, optimizer, opt_param_scheduler,
     report_memory_flag = True
     exit = False
 
+    skipped_iteration: int = 0
+
+    # flush intervals prior to current iteration
+    if args.skip_train_iteration_range is not None:
+        import bisect
+
+        ends = [end for start, end in args.skip_train_iteration_range]
+        index = bisect.bisect_left(ends, iteration)
+        for _ in range(index):
+            args.skip_train_iteration_range.popleft()
+
     if args.manual_gc:
         # Disable the default garbage collector and perform the collection manually.
         # This is to align the timing of garbage collection across ranks.
@@ -789,6 +887,24 @@ def train(forward_step_func, model, optimizer, opt_param_scheduler,
         gc.collect()
 
     while iteration < args.train_iters:
+        if (
+            # train_data_iterator is not None
+            args.skip_train_iteration_range is not None
+            and len(args.skip_train_iteration_range) > 0
+            and args.skip_train_iteration_range[0][0] <= iteration + 1 <= args.skip_train_iteration_range[0][1]
+        ):
+            start, end = args.skip_train_iteration_range.popleft()
+            print_rank_0(f"Skipped iterations {start} to {end} due to --skip-train-iteration-range flag.")
+            iteration_for_skipping = iteration
+            while iteration_for_skipping + 1 <= end:
+                try:
+                    _ = next(train_data_iterator)
+                except TypeError:
+                    pass
+                iteration_for_skipping += 1
+                skipped_iteration += 1
+            continue
+
         if args.profile and \
            iteration == args.profile_step_start and \
            torch.distributed.get_rank() in args.profile_ranks:
@@ -821,7 +937,7 @@ def train(forward_step_func, model, optimizer, opt_param_scheduler,
                                           optimizer.param_groups[0]['lr'],
                                           iteration, loss_scale,
                                           report_memory_flag, skipped_iter,
-                                          grad_norm, params_norm, num_zeros_in_grad)
+                                          grad_norm, params_norm, num_zeros_in_grad, optimizer, skipped_iteration)
 
         # Autoresume
         if args.adlr_autoresume and \
@@ -1044,6 +1160,12 @@ def evaluate_and_print_results(prefix, forward_step_func,
                 wandb_writer.log({
                     '{} validation'.format(key): total_loss_dict[key].item()},
                     iteration)
+
+        if wandb_writer and is_last_rank():
+            wandb_stats = {}
+            wandb_stats[f'lm-loss-validation/{key}'] = total_loss_dict[key].item()
+            wandb_stats[f'lm-loss-validation/{key}_ppl'] = ppl
+            wandb.log(wandb_stats, step=iteration)
 
     if process_non_loss_data_func is not None and writer and is_last_rank():
         process_non_loss_data_func(collected_non_loss_data, iteration, writer)

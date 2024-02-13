@@ -782,12 +782,12 @@ def _add_logging_args(parser):
     group.add_argument('--log-world-size-to-tensorboard',
                        action='store_true',
                        help='Enable world size logging to tensorboard.')
-    group.add_argument('--wandb-project', type=str, default='',
-                       help='The wandb project name. Ignore wandb by default.')
-    group.add_argument('--wandb-exp-name', type=str, default='',
-                       help='The wandb experiment name.')
-    group.add_argument('--wandb-save-dir', type=str, default='',
-                       help='Path to save the wandb results locally.')
+    group.add_argument("--wandb-entity", type=str, default=None)
+    group.add_argument("--wandb-name", type=str, default=None)
+    group.add_argument("--wandb-project", type=str, default=None)
+    group.add_argument("--wandb-id", type=str, default=None)
+    group.add_argument("--use-mpi", action="store_true", default=False)
+
     return parser
 
 
@@ -900,21 +900,21 @@ def _add_training_args(parser):
                        help='Global step to stop profiling.')
     group.add_argument('--profile-ranks', nargs='+', type=int, default=[0],
                        help='Global ranks to profile.')
-    group.add_argument('--tp-comm-overlap', action='store_true', help = 'Enables the '
+    group.add_argument('--tp-comm-overlap', action='store_true', help='Enables the '
                        ' overlap of Tensor parallel communication and GEMM kernels.')
-    group.add_argument('--tp-comm-overlap-cfg', type=str, default=None, 
-                       help = 'Config file when tp_comm_overlap is enabled.')
-    group.add_argument('--disable-tp-comm-split-ag', action='store_false', 
-                       help = 'Disables the All-Gather overlap with fprop GEMM.',
+    group.add_argument('--tp-comm-overlap-cfg', type=str, default=None,
+                       help='Config file when tp_comm_overlap is enabled.')
+    group.add_argument('--disable-tp-comm-split-ag', action='store_false',
+                       help='Disables the All-Gather overlap with fprop GEMM.',
                        dest='tp_comm_split_ag')
-    group.add_argument('--disable-tp-comm-split-rs', action='store_false', 
-                       help = 'Disables the Reduce-Scatter overlap with fprop GEMM.',
+    group.add_argument('--disable-tp-comm-split-rs', action='store_false',
+                       help='Disables the Reduce-Scatter overlap with fprop GEMM.',
                        dest='tp_comm_split_rs')
-    group.add_argument('--disable-tp-comm-bulk-dgrad', action='store_false', 
-                       help = 'Disables the All-Gather overlap with bprop activation gradient GEMM.',
+    group.add_argument('--disable-tp-comm-bulk-dgrad', action='store_false',
+                       help='Disables the All-Gather overlap with bprop activation gradient GEMM.',
                        dest='tp_comm_bulk_dgrad')
-    group.add_argument('--disable-tp-comm-bulk-wgrad', action='store_false', 
-                       help = 'Disables the Reduce-Scatter overlap with bprop weight gradient GEMM.',
+    group.add_argument('--disable-tp-comm-bulk-wgrad', action='store_false',
+                       help='Disables the Reduce-Scatter overlap with bprop weight gradient GEMM.',
                        dest='tp_comm_bulk_wgrad')
 
 
@@ -1001,6 +1001,9 @@ def _add_training_args(parser):
                        help='When using manual garbage collection, disable '
                        'garbage collection at the start and the end of each '
                        'evaluation run.', dest='manual_gc_eval')
+    group.add_argument('--skip-train-iteration-range', type=str, nargs='+', default=None,
+                       help='Iteration ranges to skip. The values are one or more dash-separated ranges. e.g., 101-200 251-300.')
+    group.add_argument("--use-z-loss", action="store_true", help="use z-loss for supplement loss (Google PaLM method)")
 
     return parser
 
